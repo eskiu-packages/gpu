@@ -133,6 +133,7 @@ The rest of `GpuPipelineDesc`:
 | `blend_mode` | `GPU_BLEND_NONE` (`blend: true` is `GPU_BLEND_ALPHA`) | `GPU_BLEND_ALPHA`, `PREMULTIPLIED`, `ADDITIVE`, `MULTIPLY`, `CONSTANT` (mixes by the pass's `set_blend_constant`) |
 | `blend_state` | null | any `*WGPUBlendState`, such as `SrcAlpha` plus `Constant` for a fade |
 | `no_color_write` | colors written | `true` for a depth-only draw |
+| `color_write_mask` | 0: every channel | the channels written, `WGPUColorWriteMask_Red \| ..._Alpha` |
 | `depth_format` | `Depth24Plus` | `Depth32Float` (make the texture with `gpu.texture(w, h, WGPUTextureFormat_Depth32Float, WGPUTextureUsage_RenderAttachment)`), `Depth24PlusStencil8`, `Depth32FloatStencil8` (when `gpu.depth32_stencil8`), `Stencil8` |
 | `depth_compare` | `Less` | any `WGPUCompareFunction`, such as `Always` for overlays |
 | `depth_read_only` | depth written | `true` turns depth writes off |
@@ -141,7 +142,7 @@ The rest of `GpuPipelineDesc`:
 | `stencil_front`, `stencil_back` | Always, Keep (back is front) | a `GpuStencilFace` |
 | `stencil_read_mask`, `stencil_write_mask` | 0xFF | any 8-bit mask |
 | `samples` | 1 | 4 (with `gpu.target_msaa` attachments) |
-| `targets`, `target_count` | the one `format` | up to 8 `GpuColorTarget{format, blend_mode, blend_state, no_color_write}` (see below) |
+| `targets`, `target_count` | the one `format` | up to 8 `GpuColorTarget{format, blend_mode, blend_state, no_color_write, color_write_mask}` (see below) |
 | `fragment` | (required for color) | null for a depth-only pipeline with no color target (a shadow map) |
 
 ## Stencil and multisampling
