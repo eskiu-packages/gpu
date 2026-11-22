@@ -1,6 +1,6 @@
 [package]
 name = "gpu"
-version = "0.7.1"
+version = "0.7.2"
 main = "examples/compute.esk"
 
 [deps]
