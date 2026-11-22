@@ -179,13 +179,14 @@ enum GpuBlend {
 }
 
 // One color target of a pipeline (GpuPipelineDesc.targets): its format and
-// blending, as GpuPipelineDesc's format, blend_mode, blend_state and
-// no_color_write are for a single target.
+// blending, as GpuPipelineDesc's format, blend_mode, blend_state,
+// no_color_write and color_write_mask are for a single target.
 struct GpuColorTarget {
     WGPUTextureFormat format;
     GpuBlend blend_mode;
     *WGPUBlendState blend_state;
     bool no_color_write;
+    uint32 color_write_mask;
 }
 
 // One face's stencil test (GpuPipelineDesc.stencil_front and stencil_back):
@@ -210,7 +211,8 @@ struct GpuStencilFace {
 //   0 with bind(), bind_texture() and bind_sampler().
 // - blend: true is GPU_BLEND_ALPHA; blend_mode picks a preset and blend_state,
 //   when not null, is any WGPUBlendState. no_color_write leaves the color
-//   target untouched (a depth-only draw).
+//   target untouched (a depth-only draw); color_write_mask writes only some
+//   channels (WGPUColorWriteMask_Red | ..._Alpha), 0 being all of them.
 // - depth turns on the depth test against a depth_format texture (default
 //   Depth24Plus, also Depth32Float) with depth_compare (default Less);
 //   depth_read_only turns depth writes off. depth_bias and depth_bias_slope
@@ -249,6 +251,7 @@ struct GpuPipelineDesc {
     GpuBlend blend_mode;
     *WGPUBlendState blend_state;
     bool no_color_write;
+    uint32 color_write_mask;
     WGPUTextureFormat depth_format;
     WGPUCompareFunction depth_compare;
     int32 depth_bias;

@@ -3,6 +3,12 @@
 All notable changes to this package are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `GpuPipelineDesc.color_write_mask` and `GpuColorTarget.color_write_mask`: the color channels a draw writes (`WGPUColorWriteMask_Red | ..._Alpha`); 0 writes all of them, as before.
+
 ## [0.7.1] - 2026-11-16
 
 ### Changed

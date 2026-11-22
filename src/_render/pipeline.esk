@@ -123,11 +123,12 @@ Result<GpuPipeline, string> Gpu_pipeline(*Gpu self, *GpuPipelineDesc d) {
     WGPUBlendState[8] blends;
     uint32 ntargets = d.target_count > 0 ? d.target_count : (uint32)1;
     for (i in 0..ntargets) {
-        GpuColorTarget ct = GpuColorTarget{d.format, d.blend_mode, d.blend_state, d.no_color_write};
+        GpuColorTarget ct = GpuColorTarget{d.format, d.blend_mode, d.blend_state, d.no_color_write, d.color_write_mask};
         if (d.target_count > 0) ct = d.targets[i];
         else if (ct.blend_mode == GPU_BLEND_NONE && d.blend) ct.blend_mode = GPU_BLEND_ALPHA;
         blends[i] = _gpu_blend_state(ct.blend_mode);
-        targets[i] = WGPUColorTargetState{format: ct.format, writeMask: ct.no_color_write ? WGPUColorWriteMask_None : WGPUColorWriteMask_All};
+        uint64 mask = ct.color_write_mask != 0 ? (uint64)(ct.color_write_mask & 15) : (uint64)WGPUColorWriteMask_All;
+        targets[i] = WGPUColorTargetState{format: ct.format, writeMask: ct.no_color_write ? WGPUColorWriteMask_None : mask};
         if (ct.blend_state != null) targets[i].blend = ct.blend_state;
         else if (ct.blend_mode != GPU_BLEND_NONE) targets[i].blend = &blends[i];
     }

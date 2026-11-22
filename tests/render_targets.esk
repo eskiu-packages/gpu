@@ -264,6 +264,30 @@ Result<int, string> mrt(*Gpu gpu, *uint8 px) {
 // A 2D array of 3 layers and a cube, each layer and face drawn with its own
 // color through a view of it, then sampled whole (texture_2d_array,
 // texture_cube) and read back per layer.
+// color_write_mask: a white draw over a gray clear writes red and alpha only.
+Result<int, string> write_mask(*Gpu gpu, *uint8 px) {
+    GpuTexture t = gpu.target(32, 32)?;
+    defer t.release();
+    string white =
+        "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {\n"
+        "    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));\n"
+        "    return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);\n"
+        "}\n"
+        "@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0, 1.0, 1.0, 1.0); }\n";
+    GpuPipelineDesc d = GpuPipelineDesc{wgsl: white, vertex: "vs", fragment: "fs", format: t.format,
+        color_write_mask: (uint32)(WGPUColorWriteMask_Red | WGPUColorWriteMask_Alpha)};
+    GpuPipeline p = gpu.pipeline(&d)?;
+    defer p.release();
+    GpuColorAttachment[1] c = {GpuColorAttachment{view: t.view, clear: GpuColor{0.2, 0.2, 0.2, 0.2}}};
+    GpuPassOptions o = GpuPassOptions{colors: &c[0], color_count: 1};
+    GpuPass pass = gpu.pass_with(null, &o);
+    pass.draw(&p, null, 3, 1);
+    pass.end()?;
+    t.read(px)?;
+    expect("color_write_mask red and alpha", px + 8 * 32 * 4, 8, 255, 51, 51, 255);
+    return Ok<int, string>(0);
+}
+
 Result<int, string> layers(*Gpu gpu, *GpuPipeline pipe, *GpuSampler samp) {
     uint8[64] px;
     int[3] want;
@@ -694,6 +718,7 @@ int main() {
     GpuSampler samp = gpu.sampler_with(&so).value;
     defer samp.release();
     run_case("mrt", mrt(&gpu, px));
+    run_case("write_mask", write_mask(&gpu, px));
     run_case("layers", layers(&gpu, &pipe, &samp));
     run_case("mip_targets", mip_targets(&gpu, &pipe));
     run_case("mips RGBA8 16x16", gen_mips_rgba8(&gpu, "mips RGBA8 16x16", 16, 16, 1, false, WGPUTextureFormat_RGBA8Unorm));
