@@ -300,12 +300,44 @@ struct GpuBindGroup {
     bool stale;
 }
 
+struct _GpuTimerSlot {
+    GpuBuffer read;
+    *_GpuWait wait;
+    uint32 count;
+    int64 frame;
+}
+
+// The GPU's own time per frame from timestamp queries (Gpu.timestamps), made by Gpu_timer.
+// An encoder handed the timer (GpuEncoder_time) has the GPU write its clock at the start
+// and the end of each of its render passes; GpuTimer_poll collects the times a few frames
+// later without waiting. last_ms is the GPU time of the latest frame collected, from the
+// start of its first pass to the end of its last (-1 before the first), last_frame its
+// number (frames are counted by timed submissions), pass_ms each of its passes, and
+// dropped the frames not timed because every read-back buffer was still on its way.
+struct GpuTimer {
+    Gpu gpu;
+    WGPUQuerySet set;
+    GpuBuffer resolve;
+    List<_GpuTimerSlot> slots;
+    uint32 capacity;
+    uint32 used;
+    int slot;
+    double period;
+    int64 frames;
+    double last_ms;
+    int64 last_frame;
+    List<double> pass_ms;
+    int dropped;
+}
+
 // A command encoder that passes are opened from (GpuEncoder_pass), sent to
-// the GPU in one submission by GpuEncoder_submit.
+// the GPU in one submission by GpuEncoder_submit. timer, when set by
+// GpuEncoder_time, times its render passes.
 struct GpuEncoder {
     Gpu gpu;
     WGPUCommandEncoder enc;
     List<WGPUBindGroup> groups;
+    *GpuTimer timer;
 }
 
 // A pass's attachments: the color target is cleared to clear, or keeps its
@@ -410,3 +442,4 @@ Result<GpuBuffer, string> Gpu_indices(*Gpu self, *uint32 data, uint64 count) {
 import "_render/texture.esk";
 import "_render/pipeline.esk";
 import "_render/pass.esk";
+import "_render/timer.esk";

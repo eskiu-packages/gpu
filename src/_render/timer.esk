@@ -1,0 +1,158 @@
+// _render/timer.esk: GPU time per frame from timestamp queries (part of render.esk, which imports it in order after the ones before it)
+
+// A timer for frames of up to passes render passes (2 to 128; 32 when 0), with three
+// read-back buffers so that collecting a frame's times never waits for the GPU. Fails
+// with "timer: no timestamp queries on this device" when Gpu.timestamps is false (WebGL2,
+// a driver without them): report the GPU time as unavailable then, rather than guessing.
+// The timer holds a query set and four small buffers (16 bytes a pass each).
+Result<GpuTimer, string> Gpu_timer(*Gpu self, uint32 passes) {
+    if (!self.timestamps) return Err<GpuTimer, string>(_gpu_fail("timer: no timestamp queries on this device", null));
+    uint32 n = passes == 0 ? (uint32)32 : passes;
+    if (n < 2) n = 2;
+    if (n > 128) n = 128;
+    GpuTimer t;
+    t.gpu = *self;
+    t.capacity = n * 2;
+    t.last_ms = -1.0;
+    t.last_frame = -1;
+    t.slot = -1;
+#ifdef __EMSCRIPTEN__
+    t.period = 1.0;
+#else
+    t.period = (double)wgpuQueueGetTimestampPeriod(self.queue);
+    if (t.period <= 0.0) t.period = 1.0;
+#endif
+    _gpu_push(self);
+    WGPUQuerySetDescriptor qd = WGPUQuerySetDescriptor{type_: WGPUQueryType_Timestamp, count: t.capacity};
+    t.set = wgpuDeviceCreateQuerySet(self.device, &qd);
+    string err = _gpu_pop(self, "timer");
+    if (err != null || t.set == null) {
+        if (t.set != null) wgpuQuerySetRelease(t.set);
+        return Err<GpuTimer, string>(err != null ? err : _gpu_fail("timer", null));
+    }
+    uint64 bytes = (uint64)t.capacity * 8;
+    Result<GpuBuffer, string> rb = Gpu_buffer(self, bytes, WGPUBufferUsage_QueryResolve | WGPUBufferUsage_CopySrc);
+    if (!rb.ok) {
+        GpuTimer_release(&t);
+        return Err<GpuTimer, string>(rb.error);
+    }
+    t.resolve = rb.value;
+    for (i in 0..3) {
+        Result<GpuBuffer, string> b = Gpu_buffer(self, bytes, WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
+        if (!b.ok) {
+            GpuTimer_release(&t);
+            return Err<GpuTimer, string>(b.error);
+        }
+        _GpuTimerSlot s;
+        s.read = b.value;
+        List_push(&t.slots, s);
+    }
+    return Ok<GpuTimer, string>(t);
+}
+
+// Times this encoder's render passes with timer (the passes begun after the call; up to
+// the timer's passes, the rest untimed). Returns false, timing nothing, when the three
+// earlier frames' times are all still on their way back (GpuTimer.dropped counts them).
+bool GpuEncoder_time(*GpuEncoder self, *GpuTimer timer) {
+    GpuTimer_poll(timer);
+    for (i in 0..timer.slots.size) {
+        if (timer.slots.data[i].wait == null) {
+            timer.slot = i;
+            timer.used = 0;
+            self.timer = timer;
+            return true;
+        }
+    }
+    timer.dropped++;
+    return false;
+}
+
+// Before the encoder finishes: the frame's timestamps into the resolve buffer, copied to
+// the slot's read-back buffer.
+void _gpu_timer_resolve(*GpuTimer t, WGPUCommandEncoder enc) {
+    if (t.used == 0 || t.slot < 0) return;
+    wgpuCommandEncoderResolveQuerySet(enc, t.set, 0, t.used, t.resolve.handle, 0);
+    wgpuCommandEncoderCopyBufferToBuffer(enc, t.resolve.handle, 0, t.slots.data[t.slot].read.handle, 0, (uint64)t.used * 8);
+}
+
+// After the submission: maps the slot's buffer, read by a later GpuTimer_poll.
+void _gpu_timer_submitted(*GpuTimer t, bool ok) {
+    if (!ok || t.used == 0 || t.slot < 0) {
+        t.slot = -1;
+        return;
+    }
+    *_GpuTimerSlot s = &t.slots.data[t.slot];
+    s.count = t.used;
+    s.frame = t.frames;
+    t.frames++;
+    s.wait = alloc<_GpuWait>(1);
+    WGPUBufferMapCallbackInfo mi = WGPUBufferMapCallbackInfo{mode: WGPUCallbackMode_AllowSpontaneous, callback: (*void)_gpu_on_map, userdata1: s.wait};
+    s.wait.future = wgpuBufferMapAsync(s.read.handle, WGPUMapMode_Read, 0, (uint64)s.count * 8, mi).id;
+    t.slot = -1;
+    t.used = 0;
+}
+
+void _gpu_timer_take(*GpuTimer t, *_GpuTimerSlot s) {
+    if (s.wait.status == WGPUMapAsyncStatus_Success) {
+        *uint64 q = (*uint64)wgpuBufferGetConstMappedRange(s.read.handle, 0, (uint64)s.count * 8);
+        if (q != null && s.frame > t.last_frame) {
+            List_clear(&t.pass_ms);
+            uint64 first = 0;
+            uint64 last = 0;
+            bool valid = false;
+            for (k in 0..s.count / 2) {
+                uint64 a = q[k * 2];
+                uint64 b = q[k * 2 + 1];
+                double ms = b > a ? (double)(b - a) * t.period / 1000000.0 : 0.0;
+                List_push(&t.pass_ms, ms);
+                if (a == 0 || b < a) continue;
+                if (!valid || a < first) first = a;
+                if (!valid || b > last) last = b;
+                valid = true;
+            }
+            t.last_ms = valid ? (double)(last - first) * t.period / 1000000.0 : -1.0;
+            t.last_frame = s.frame;
+        }
+        wgpuBufferUnmap(s.read.handle);
+    }
+    String_free(&s.wait.msg);
+    free(s.wait);
+    s.wait = null;
+}
+
+// Collects the times of the frames whose read-back has arrived, without waiting; last_ms
+// then holds the latest. Returns whether a new frame's time came in. GpuEncoder_time
+// calls it.
+bool GpuTimer_poll(*GpuTimer self) {
+    bool pending = false;
+    for (i in 0..self.slots.size) {
+        if (self.slots.data[i].wait != null) pending = true;
+    }
+    if (!pending) return false;
+#ifndef __EMSCRIPTEN__
+    wgpuDevicePoll(self.gpu.device, 0, null);
+#endif
+    int64 before = self.last_frame;
+    for (i in 0..self.slots.size) {
+        *_GpuTimerSlot s = &self.slots.data[i];
+        if (s.wait != null && s.wait.done != 0) _gpu_timer_take(self, s);
+    }
+    return self.last_frame != before;
+}
+
+// Waits for the times still on their way, then releases the query set and the buffers.
+void GpuTimer_release(*GpuTimer self) {
+    for (i in 0..self.slots.size) {
+        *_GpuTimerSlot s = &self.slots.data[i];
+        if (s.wait != null) {
+            _gpu_wait(&self.gpu, s.wait);
+            if (s.wait.done != 0) _gpu_timer_take(self, s);
+        }
+        s.read.release();
+    }
+    List_free(&self.slots);
+    List_free(&self.pass_ms);
+    self.resolve.release();
+    if (self.set != null) wgpuQuerySetRelease(self.set);
+    self.set = null;
+}

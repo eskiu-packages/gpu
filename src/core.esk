@@ -73,6 +73,8 @@ struct Gpu {
     bool etc2;
     bool astc;
     bool webgl2;
+    // timestamp queries (GpuTimer): the GPU's own time per pass, when the adapter has them
+    bool timestamps;
 }
 
 // The GPU objects made through this package that are still alive, in the whole process
@@ -263,7 +265,7 @@ Result<Gpu, string> gpu_open() {
     // storage buffer at 128 MB, too little for model weights.
     WGPULimits limits;
     wgpuAdapterGetLimits(g.adapter, &limits);
-    WGPUFeatureName[8] features;
+    WGPUFeatureName[12] features;
     uint64 nfeatures = 0;
     if (wgpuAdapterHasFeature(g.adapter, WGPUFeatureName_ShaderF16) != 0) {
         features[nfeatures] = WGPUFeatureName_ShaderF16;
@@ -291,6 +293,7 @@ Result<Gpu, string> gpu_open() {
     g.bc = _gpu_want(&g, WGPUFeatureName_TextureCompressionBC, &features[0], &nfeatures);
     g.etc2 = _gpu_want(&g, WGPUFeatureName_TextureCompressionETC2, &features[0], &nfeatures);
     g.astc = _gpu_want(&g, WGPUFeatureName_TextureCompressionASTC, &features[0], &nfeatures);
+    if (!g.webgl2) g.timestamps = _gpu_want(&g, WGPUFeatureName_TimestampQuery, &features[0], &nfeatures);
     g.max_buffer = limits.maxBufferSize;
     WGPUAdapterInfo info;
     wgpuAdapterGetInfo(g.adapter, &info);

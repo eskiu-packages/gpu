@@ -40,6 +40,13 @@ void _gpu_begin(*GpuPass p, WGPUTextureView target, *GpuPassOptions o) {
         }
         rd.depthStencilAttachment = &da;
     }
+    WGPUPassTimestampWrites tw;
+    if (p.encoder != null && p.encoder.timer != null && p.encoder.timer.used + 2 <= p.encoder.timer.capacity) {
+        *GpuTimer t = p.encoder.timer;
+        tw = WGPUPassTimestampWrites{querySet: t.set, beginningOfPassWriteIndex: t.used, endOfPassWriteIndex: t.used + 1};
+        t.used = t.used + 2;
+        rd.timestampWrites = &tw;
+    }
     p.pass = wgpuCommandEncoderBeginRenderPass(p.enc, &rd);
 }
 
@@ -63,8 +70,12 @@ GpuPass GpuEncoder_pass_with(*GpuEncoder self, WGPUTextureView target, *GpuPassO
 
 // Sends the passes to the GPU and reports the errors of the whole frame.
 Result<int, string> GpuEncoder_submit(*GpuEncoder self) {
+    *GpuTimer timer = self.timer;
+    if (timer != null) _gpu_timer_resolve(timer, self.enc);
     string err = _gpu_finish(&self.gpu, self.enc, "frame");
     self.enc = null;
+    self.timer = null;
+    if (timer != null) _gpu_timer_submitted(timer, err == null);
     _gpu_release_groups(&self.groups);
     if (err != null) return Err<int, string>(err);
     return Ok<int, string>(0);
