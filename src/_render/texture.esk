@@ -59,6 +59,7 @@ Result<GpuTexture, string> Gpu_texture_with(*Gpu self, *GpuTextureDesc d) {
     }
     string err = _gpu_pop(self, "texture");
     GpuTexture tex = GpuTexture{*self, t, v, format, d.width, d.height, mips, samples, layers, dim, usage};
+    if (t != null) _gpu_count_texture(&tex, 1);
     if (err != null || t == null) {
         GpuTexture_release(&tex);
         return Err<GpuTexture, string>(err != null ? err : _gpu_fail("texture", null));
@@ -159,6 +160,33 @@ uint32 _gpu_texel_bytes(WGPUTextureFormat f) {
     uint32 b = 4;
     _gpu_format_block(f, &bw, &bh, &b);
     return b;
+}
+
+// The bytes a texture takes: every mip level of every layer, times its samples.
+uint64 GpuTexture_bytes(*GpuTexture t) {
+    uint32 bw = 1;
+    uint32 bh = 1;
+    uint32 b = 4;
+    _gpu_format_block(t.format, &bw, &bh, &b);
+    uint64 total = 0;
+    uint32 w = t.width;
+    uint32 h = t.height;
+    uint32 mips = t.mips > 0 ? t.mips : (uint32)1;
+    for (m in 0..mips) {
+        total = total + (uint64)((w + bw - 1) / bw) * (uint64)((h + bh - 1) / bh) * (uint64)b;
+        w = w > 1 ? w / 2 : (uint32)1;
+        h = h > 1 ? h / 2 : (uint32)1;
+    }
+    uint64 layers = t.layers > 0 ? (uint64)t.layers : (uint64)1;
+    uint64 samples = t.samples > 0 ? (uint64)t.samples : (uint64)1;
+    return total * layers * samples;
+}
+
+void _gpu_count_texture(*GpuTexture t, int n) {
+    _gpu_counts.textures = _gpu_counts.textures + n;
+    uint64 bytes = GpuTexture_bytes(t);
+    if (n > 0) _gpu_counts.texture_bytes = _gpu_counts.texture_bytes + bytes;
+    else _gpu_counts.texture_bytes = _gpu_counts.texture_bytes - bytes;
 }
 
 // The sRGB twin of a format (RGBA8Unorm gives RGBA8UnormSrgb; also BGRA8 and
@@ -420,6 +448,7 @@ Result<GpuReadback, string> _gpu_read_start(*GpuTexture self, uint32 layer, uint
     string err = _gpu_finish(g, enc, "read");
     if (err != null) {
         wgpuBufferRelease(rb.staging);
+        _gpu_count_buffer(-1, staging.size);
         return Err<GpuReadback, string>(err);
     }
     rb.wait = alloc<_GpuWait>(1);
@@ -476,6 +505,7 @@ Result<int, string> GpuReadback_take(*GpuReadback self, *void out) {
     }
     wgpuBufferUnmap(self.staging);
     wgpuBufferRelease(self.staging);
+    _gpu_count_buffer(-1, bytes);
     self.staging = null;
     return Ok<int, string>(0);
 }
@@ -488,7 +518,10 @@ void GpuReadback_release(*GpuReadback self) {
         String_free(&self.wait.msg);
         free(self.wait);
     }
-    if (self.staging != null) wgpuBufferRelease(self.staging);
+    if (self.staging != null) {
+        wgpuBufferRelease(self.staging);
+        _gpu_count_buffer(-1, (uint64)self.padded * self.height);
+    }
     self.wait = null;
     self.staging = null;
 }
@@ -497,7 +530,10 @@ void GpuReadback_release(*GpuReadback self) {
 // view_with or view_as are released separately.
 void GpuTexture_release(*GpuTexture self) {
     if (self.view != null) wgpuTextureViewRelease(self.view);
-    if (self.handle != null) wgpuTextureRelease(self.handle);
+    if (self.handle != null) {
+        wgpuTextureRelease(self.handle);
+        _gpu_count_texture(self, -1);
+    }
     self.view = null;
     self.handle = null;
 }

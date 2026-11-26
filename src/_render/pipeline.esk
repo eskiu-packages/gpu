@@ -22,12 +22,16 @@ Result<GpuSampler, string> Gpu_sampler_with(*Gpu self, *GpuSamplerOptions o) {
     WGPUSampler s = wgpuDeviceCreateSampler(self.device, &d);
     string err = _gpu_pop(self, "sampler");
     if (err != null) return Err<GpuSampler, string>(err);
+    if (s != null) _gpu_counts.samplers++;
     return Ok<GpuSampler, string>(GpuSampler{s});
 }
 
 // Releases the sampler; a second call does nothing.
 void GpuSampler_release(*GpuSampler self) {
-    if (self.handle != null) wgpuSamplerRelease(self.handle);
+    if (self.handle != null) {
+        wgpuSamplerRelease(self.handle);
+        _gpu_counts.samplers--;
+    }
     self.handle = null;
 }
 
@@ -157,6 +161,7 @@ Result<GpuPipeline, string> Gpu_pipeline(*Gpu self, *GpuPipelineDesc d) {
     if (d.depth) rd.depthStencil = &ds;
     _gpu_push(self);
     p.handle = wgpuDeviceCreateRenderPipeline(self.device, &rd);
+    if (p.handle != null) _gpu_counts.render_pipelines++;
     err = _gpu_pop(self, "pipeline");
     if (err != null) {
         GpuPipeline_release(&p);
@@ -206,9 +211,15 @@ void GpuPipeline_bind_sampler(*GpuPipeline self, uint32 binding, *GpuSampler s) 
 // Releases the pipeline, its shader module, layouts and bind group, and the list of
 // bindings (not the bound resources).
 void GpuPipeline_release(*GpuPipeline self) {
-    if (self.group != null) wgpuBindGroupRelease(self.group);
+    if (self.group != null) {
+        wgpuBindGroupRelease(self.group);
+        _gpu_count_group(-1);
+    }
     if (self.layout != null) wgpuBindGroupLayoutRelease(self.layout);
-    if (self.handle != null) wgpuRenderPipelineRelease(self.handle);
+    if (self.handle != null) {
+        wgpuRenderPipelineRelease(self.handle);
+        _gpu_counts.render_pipelines--;
+    }
     if (self.pipeline_layout != null) wgpuPipelineLayoutRelease(self.pipeline_layout);
     if (self.module != null) wgpuShaderModuleRelease(self.module);
     List_free(&self.entries);
@@ -327,7 +338,10 @@ void GpuBindGroup_sampler(*GpuBindGroup self, uint32 binding, *GpuSampler s) {
 // Releases the bind group, its reference to the layout, and the entry list (not the
 // resources in it).
 void GpuBindGroup_release(*GpuBindGroup self) {
-    if (self.handle != null) wgpuBindGroupRelease(self.handle);
+    if (self.handle != null) {
+        wgpuBindGroupRelease(self.handle);
+        _gpu_count_group(-1);
+    }
     if (self.layout != null) wgpuBindGroupLayoutRelease(self.layout);
     List_free(&self.entries);
     self.handle = null;
@@ -342,6 +356,7 @@ void _gpu_group_for(*GpuPass self, WGPUBindGroupLayout layout, List<WGPUBindGrou
     if (*group != null) List_push(&self.groups, *group);
     WGPUBindGroupDescriptor bd = WGPUBindGroupDescriptor{layout: layout, entryCount: (uint64)entries.size, entries: entries.data};
     *group = wgpuDeviceCreateBindGroup(self.gpu.device, &bd);
+    if (*group != null) _gpu_count_group(1);
     *stale = false;
 }
 

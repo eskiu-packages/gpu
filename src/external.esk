@@ -36,6 +36,7 @@ Result<GpuTexture, string> Gpu_texture_from_metal(*Gpu self, *void metal_texture
     }
     string err = _gpu_pop(self, "texture_from_metal");
     GpuTexture tex = GpuTexture{*self, t, v, format, width, height, 1, 1, n, dim, u};
+    if (t != null) _gpu_count_texture(&tex, 1);
     if (err != null || t == null) {
         GpuTexture_release(&tex);
         return Err<GpuTexture, string>(err != null ? err : _gpu_fail("texture_from_metal", null));
@@ -89,6 +90,7 @@ Result<GpuTexture, string> Gpu_texture_from_vulkan(*Gpu self, uint64 vk_image, u
     }
     string err = _gpu_pop(self, "texture_from_vulkan");
     GpuTexture tex = GpuTexture{*self, t, v, format, width, height, 1, 1, n, dim, u};
+    if (t != null) _gpu_count_texture(&tex, 1);
     if (err != null || t == null) {
         GpuTexture_release(&tex);
         return Err<GpuTexture, string>(err != null ? err : _gpu_fail("texture_from_vulkan", null));

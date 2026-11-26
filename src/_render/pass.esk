@@ -65,10 +65,20 @@ GpuPass GpuEncoder_pass_with(*GpuEncoder self, WGPUTextureView target, *GpuPassO
 Result<int, string> GpuEncoder_submit(*GpuEncoder self) {
     string err = _gpu_finish(&self.gpu, self.enc, "frame");
     self.enc = null;
-    for (i in 0..self.groups.size) wgpuBindGroupRelease(self.groups.data[i]);
-    List_free(&self.groups);
+    _gpu_release_groups(&self.groups);
     if (err != null) return Err<int, string>(err);
     return Ok<int, string>(0);
+}
+
+// Releases the bind groups replaced while recording, once their commands are submitted.
+void _gpu_release_groups(List<WGPUBindGroup>* groups) {
+    for (i in 0..groups.size) {
+        if (groups.data[i] != null) {
+            wgpuBindGroupRelease(groups.data[i]);
+            _gpu_count_group(-1);
+        }
+    }
+    List_free(groups);
 }
 
 // Finishes enc and pops the error scope pushed when it was made; the commands
@@ -190,8 +200,7 @@ Result<int, string> GpuPass_end(*GpuPass self) {
     }
     string err = _gpu_finish(g, self.enc, "render pass");
     self.enc = null;
-    for (i in 0..self.groups.size) wgpuBindGroupRelease(self.groups.data[i]);
-    List_free(&self.groups);
+    _gpu_release_groups(&self.groups);
     if (self.err != null) return Err<int, string>(_gpu_fail(self.err, null));
     if (err != null) return Err<int, string>(err);
     return Ok<int, string>(0);

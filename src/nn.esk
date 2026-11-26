@@ -250,7 +250,10 @@ _NnPipe* _nn_pipe(*NnProgram self, string key, string wgsl) {
     p.module = _gpu_module(g, wgsl);
     WGPUComputePipelineDescriptor pd = WGPUComputePipelineDescriptor{compute: WGPUComputeState{module: p.module, entryPoint: gpu_str("main")}};
     p.pipeline = wgpuDeviceCreateComputePipeline(g.device, &pd);
-    if (p.pipeline != null) p.layout = wgpuComputePipelineGetBindGroupLayout(p.pipeline, 0);
+    if (p.pipeline != null) {
+        p.layout = wgpuComputePipelineGetBindGroupLayout(p.pipeline, 0);
+        _gpu_counts.compute_pipelines++;
+    }
     string err = _gpu_pop(g, key);
     if (err != null) {
         print_err("nn: ");
@@ -278,6 +281,7 @@ void _nn_record(*NnProgram self, string key, string wgsl, *uint32 params, int np
     WGPUBindGroupDescriptor bd = WGPUBindGroupDescriptor{layout: pipe.layout, entryCount: (uint64)(2 + ntensors), entries: &e[0]};
     _gpu_push(g);
     WGPUBindGroup group = wgpuDeviceCreateBindGroup(g.device, &bd);
+    if (group != null) _gpu_count_group(1);
     string err = _gpu_pop(g, key);
     if (err != null) {
         print_err("nn: ");
@@ -309,11 +313,19 @@ Result<int, string> NnProgram_run(*NnProgram self) {
 // Releases every recorded dispatch, pipeline and parameter buffer and the step buffer; not
 // the tensors the operations use.
 void NnProgram_release(*NnProgram self) {
-    for (i in 0..self.ops.size) wgpuBindGroupRelease(self.ops.data[i].group);
+    for (i in 0..self.ops.size) {
+        if (self.ops.data[i].group != null) {
+            wgpuBindGroupRelease(self.ops.data[i].group);
+            _gpu_count_group(-1);
+        }
+    }
     for (i in 0..self.pipes.size) {
         _NnPipe* p = &self.pipes.data[i];
         if (p.layout != null) wgpuBindGroupLayoutRelease(p.layout);
-        if (p.pipeline != null) wgpuComputePipelineRelease(p.pipeline);
+        if (p.pipeline != null) {
+            wgpuComputePipelineRelease(p.pipeline);
+            _gpu_counts.compute_pipelines--;
+        }
         if (p.module != null) wgpuShaderModuleRelease(p.module);
         String_free(&p.key);
     }

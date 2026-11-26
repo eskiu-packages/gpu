@@ -75,6 +75,42 @@ struct Gpu {
     bool webgl2;
 }
 
+// The GPU objects made through this package that are still alive, in the whole process
+// (every Gpu together): buffers and their bytes, textures and their bytes (every mip level,
+// layer and sample), render and compute pipelines, WebGPU bind groups (a GpuBindGroup counts
+// once it has been used in a pass, a pipeline's group 0 once drawn with), and samplers.
+// gpu_counts() reads them; compare two readings to find what grows (docs/profiling.md). The
+// numbers are plain integers, not atomic: read them from the thread that makes and releases
+// the objects. A GpuTexture over a texture made outside wgpu (Gpu_texture_from_metal,
+// Gpu_texture_from_vulkan) counts too, with the bytes its size and format would take.
+struct GpuCounts {
+    int buffers;
+    uint64 buffer_bytes;
+    int textures;
+    uint64 texture_bytes;
+    int render_pipelines;
+    int compute_pipelines;
+    int bind_groups;
+    int samplers;
+}
+
+GpuCounts _gpu_counts;
+
+// The live GPU objects made through this package so far (see GpuCounts).
+GpuCounts gpu_counts() {
+    return _gpu_counts;
+}
+
+void _gpu_count_buffer(int n, uint64 bytes) {
+    _gpu_counts.buffers = _gpu_counts.buffers + n;
+    if (n > 0) _gpu_counts.buffer_bytes = _gpu_counts.buffer_bytes + bytes;
+    else _gpu_counts.buffer_bytes = _gpu_counts.buffer_bytes - bytes;
+}
+
+void _gpu_count_group(int n) {
+    _gpu_counts.bind_groups = _gpu_counts.bind_groups + n;
+}
+
 // A buffer in GPU memory: handle is the WebGPU buffer and size its length in bytes. It
 // keeps a copy of the Gpu that made it, so it must be released before that Gpu is.
 struct GpuBuffer {
@@ -344,6 +380,7 @@ Result<GpuBuffer, string> Gpu_buffer(*Gpu self, uint64 size, WGPUBufferUsage usa
         if (b != null) wgpuBufferRelease(b);
         return Err<GpuBuffer, string>(err != null ? err : _gpu_fail("buffer", null));
     }
+    _gpu_count_buffer(1, size);
     return Ok<GpuBuffer, string>(GpuBuffer{*self, b, size});
 }
 
@@ -407,7 +444,10 @@ Result<int, string> GpuBuffer_read_mapped(*GpuBuffer self, *void out, uint64 byt
 
 // Releases the buffer; a second call does nothing.
 void GpuBuffer_release(*GpuBuffer self) {
-    if (self.handle != null) wgpuBufferRelease(self.handle);
+    if (self.handle != null) {
+        wgpuBufferRelease(self.handle);
+        _gpu_count_buffer(-1, self.size);
+    }
     self.handle = null;
 }
 
@@ -432,7 +472,10 @@ Result<GpuKernel, string> Gpu_kernel(*Gpu self, string wgsl, string entry) {
     _gpu_push(self);
     WGPUComputePipelineDescriptor pd = WGPUComputePipelineDescriptor{compute: WGPUComputeState{module: k.module, entryPoint: gpu_str(entry)}};
     k.pipeline = wgpuDeviceCreateComputePipeline(self.device, &pd);
-    if (k.pipeline != null) k.layout = wgpuComputePipelineGetBindGroupLayout(k.pipeline, 0);
+    if (k.pipeline != null) {
+        k.layout = wgpuComputePipelineGetBindGroupLayout(k.pipeline, 0);
+        _gpu_counts.compute_pipelines++;
+    }
     err = _gpu_pop(self, "pipeline");
     if (err != null) {
         GpuKernel_release(&k);
@@ -481,7 +524,10 @@ Result<int, string> GpuKernel_dispatch(*GpuKernel self, uint32 x, uint32 y, uint
 // bound buffers).
 void GpuKernel_release(*GpuKernel self) {
     if (self.layout != null) wgpuBindGroupLayoutRelease(self.layout);
-    if (self.pipeline != null) wgpuComputePipelineRelease(self.pipeline);
+    if (self.pipeline != null) {
+        wgpuComputePipelineRelease(self.pipeline);
+        _gpu_counts.compute_pipelines--;
+    }
     if (self.module != null) wgpuShaderModuleRelease(self.module);
     List_free(&self.entries);
     self.layout = null;
