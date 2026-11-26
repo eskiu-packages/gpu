@@ -1,0 +1,127 @@
+// The live object counts (gpu_counts) follow what is made and released, and GpuTimer
+// measures the GPU time of frames when the device has timestamp queries.
+import <io>;
+import <mem>;
+import <gpu>;
+
+string shader =
+    "@group(0) @binding(0) var<uniform> tint: vec4<f32>;\n"
+    "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {\n"
+    "    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));\n"
+    "    return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);\n"
+    "}\n"
+    "@fragment fn fs() -> @location(0) vec4<f32> { return tint; }\n";
+
+int fails = 0;
+
+void check(string what, bool ok) {
+    if (!ok) {
+        printf("FAIL %s\n", what);
+        fails++;
+    }
+}
+
+bool same(GpuCounts a, GpuCounts b) {
+    return a.buffers == b.buffers && a.buffer_bytes == b.buffer_bytes && a.textures == b.textures &&
+        a.texture_bytes == b.texture_bytes && a.render_pipelines == b.render_pipelines &&
+        a.compute_pipelines == b.compute_pipelines && a.bind_groups == b.bind_groups && a.samplers == b.samplers;
+}
+
+Result<int, string> counts(*Gpu gpu) {
+    GpuCounts base = gpu_counts();
+    GpuBuffer b = gpu.uniform(null, 256)?;
+    GpuCounts c = gpu_counts();
+    check("a buffer counts", c.buffers == base.buffers + 1 && c.buffer_bytes == base.buffer_bytes + 256);
+    GpuTextureDesc td = GpuTextureDesc{width: 64, height: 32, mipmaps: true};
+    GpuTexture t = gpu.texture_with(&td)?;
+    c = gpu_counts();
+    // 64x32 RGBA8 with 7 levels: (2048 + 512 + 128 + 32 + 8 + 2 + 1) texels of 4 bytes
+    check("texture bytes", t.bytes() == (uint64)(2731 * 4));
+    check("a texture counts", c.textures == base.textures + 1 && c.texture_bytes == base.texture_bytes + t.bytes());
+    GpuTexture ms = gpu.target_msaa(16, 16, WGPUTextureFormat_RGBA8Unorm, 4)?;
+    check("samples count", ms.bytes() == (uint64)(16 * 16 * 4 * 4));
+    ms.release();
+    GpuSampler s = gpu.sampler(true)?;
+    check("a sampler counts", gpu_counts().samplers == base.samplers + 1);
+    GpuTexture target = gpu.target(32, 32)?;
+    GpuPipelineDesc d = GpuPipelineDesc{wgsl: shader, vertex: "vs", fragment: "fs", format: target.format};
+    GpuPipeline pipe = gpu.pipeline(&d)?;
+    check("a pipeline counts", gpu_counts().render_pipelines == base.render_pipelines + 1);
+    pipe.bind(0, &b);
+    for (i in 0..3) {
+        GpuPass pass = gpu.pass(target.view, GpuColor{0.0, 0.0, 0.0, 1.0}, null);
+        pass.draw(&pipe, null, 3, 1);
+        pass.end()?;
+        // a binding changed: the group is made again, the old one released with the pass
+        pipe.bind(0, &b);
+    }
+    check("one live bind group", gpu_counts().bind_groups == base.bind_groups + 1);
+    GpuReadback rb = target.read_async()?;
+    rb.release();
+    pipe.release();
+    target.release();
+    s.release();
+    t.release();
+    b.release();
+    c = gpu_counts();
+    check("back to the baseline", same(c, base));
+    if (!same(c, base)) {
+        printf("buffers %d bytes %llu textures %d bytes %llu pipelines %d groups %d samplers %d\n", c.buffers,
+            c.buffer_bytes, c.textures, c.texture_bytes, c.render_pipelines, c.bind_groups, c.samplers);
+    }
+    return Ok<int, string>(0);
+}
+
+Result<int, string> timer(*Gpu gpu) {
+    Result<GpuTimer, string> made = gpu.timer(8);
+    if (!gpu.timestamps) {
+        check("no timer without timestamp queries", !made.ok);
+        printf("timestamp queries: unavailable on this device\n");
+        return Ok<int, string>(0);
+    }
+    GpuTimer t = made?;
+    defer t.release();
+    GpuTexture target = gpu.target_with(512, 512, WGPUTextureFormat_RGBA16Float)?;
+    defer target.release();
+    GpuBuffer tint = gpu.uniform(null, 16)?;
+    defer tint.release();
+    GpuPipelineDesc d = GpuPipelineDesc{wgsl: shader, vertex: "vs", fragment: "fs", format: target.format, blend: true};
+    GpuPipeline pipe = gpu.pipeline(&d)?;
+    defer pipe.release();
+    pipe.bind(0, &tint);
+    for (f in 0..12) {
+        GpuEncoder enc = gpu.encoder();
+        enc.time(&t);
+        for (p in 0..2) {
+            GpuPass pass = enc.pass(target.view, GpuColor{0.0, 0.0, 0.0, 1.0}, null);
+            for (k in 0..50) pass.draw(&pipe, null, 3, 1);
+            pass.end()?;
+        }
+        enc.submit()?;
+        gpu.wait();
+        t.poll();
+    }
+    printf("gpu frame %.3f ms (frame %lld), passes %d, dropped %d\n", t.last_ms, t.last_frame, t.pass_ms.size, t.dropped);
+    check("a frame was timed", t.last_frame >= 0);
+    check("two passes", t.pass_ms.size == 2);
+    check("a positive time", t.last_ms > 0.0 && t.last_ms < 1000.0);
+    return Ok<int, string>(0);
+}
+
+int main() {
+    Result<Gpu, string> g = gpu_open();
+    if (!g.ok) {
+        printf("error: %s\n", g.error);
+        return 1;
+    }
+    Gpu gpu = g.value;
+    Result<int, string> r = counts(&gpu);
+    if (r.ok) r = timer(&gpu);
+    gpu.release();
+    if (!r.ok) {
+        printf("error: %s\n", r.error);
+        return 1;
+    }
+    if (fails == 0) printf("ok\n");
+    return fails == 0 ? 0 : 1;
+}
