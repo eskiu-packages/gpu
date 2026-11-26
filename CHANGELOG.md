@@ -3,6 +3,13 @@
 All notable changes to this package are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `gpu_counts()` and `GpuCounts`: the live buffers, textures (with their bytes), render and compute pipelines, bind groups and samplers made through the package, to find what grows between two readings; `GpuTexture_bytes`. `docs/profiling.md` describes them.
+- `GpuTimer` (`Gpu_timer`, `GpuEncoder_time`, `GpuTimer_poll`): the GPU time of a frame and of each of its render passes from timestamp queries, read back without waiting. `gpu_open` asks for timestamp queries when the adapter has them (`Gpu.timestamps`); Metal, Vulkan and DirectX 12 through wgpu-native have them, WebGL2 does not.
+
 ## [0.7.2] - 2026-11-22
 
 ### Added

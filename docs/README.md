@@ -10,6 +10,7 @@ Guides and reference for gpu. The [README](../README.md) has the overview.
 - [iOS and Android](mobile.md)
 - [Models](models.md)
 - [Morph targets](morph.md)
+- [Counting objects and timing the GPU](profiling.md)
 - [Rendering](rendering.md)
 - [Model shadows](shadows.md)
 - [In a browser](web.md)
@@ -42,8 +43,8 @@ fingers at once) is in [docs/mobile.md](mobile.md).
 | Module | What it has |
 |---|---|
 | `<gpu>` | `<gpu/core>` and `<gpu/render>` together |
-| `<gpu/core>` | `gpu_open`, `Gpu`, `GpuBuffer` (storage, read, write) and `GpuKernel` (compute) |
-| `<gpu/render>` | `GpuTexture` (`Gpu_texture_with`: layers, cube maps, mip levels, view formats; `generate_mips`), `GpuTextureView`, `GpuSampler`, `GpuPipeline`, `GpuPass`, `GpuEncoder`, `GpuBindLayout`, `GpuBindGroup`, `GpuReadback`, vertex, index and uniform buffers, window, mobile and canvas surfaces (`surface_metal`, `surface_android`, `surface_x11`, `surface_wayland`, `surface_win32`, `surface_canvas`) |
+| `<gpu/core>` | `gpu_open`, `Gpu`, `GpuBuffer` (storage, read, write), `GpuKernel` (compute) and `gpu_counts` (live objects, [profiling](profiling.md)) |
+| `<gpu/render>` | `GpuTexture` (`Gpu_texture_with`: layers, cube maps, mip levels, view formats; `generate_mips`), `GpuTextureView`, `GpuSampler`, `GpuPipeline`, `GpuPass`, `GpuEncoder`, `GpuBindLayout`, `GpuBindGroup`, `GpuReadback`, `GpuTimer` (GPU time per frame), vertex, index and uniform buffers, window, mobile and canvas surfaces (`surface_metal`, `surface_android`, `surface_x11`, `surface_wayland`, `surface_win32`, `surface_canvas`) |
 | `<gpu/window>` | `window_open`, `Window` input events (keyboard, mouse, gamepads, touch), `PadState` and its `GpuSurface`, over SDL3 on desktop (links SDL3) |
 | `<gpu/ui>` | `GpuView`, `use_gpu_surface`, `gpu_ui_surface`, `use_gpu_touch` and `use_gpu_touches` for `eskiu-packages/ui` apps on iOS and Android |
 | `<gpu/touch>` | `GpuTouch`, `GpuTouches` (the fingers that are down) and the `"gpu"` channel's touch payload |

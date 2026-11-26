@@ -110,6 +110,7 @@ struct Gpu {
     bool etc2;
     bool astc;
     bool webgl2;
+    bool timestamps;
 }
 ```
 
@@ -125,6 +126,38 @@ be in those block-compressed formats (BC on desktop GPUs, ETC2 and ASTC on
 phones and Apple Silicon). gpu_open turns on each one the adapter has.
 webgl2 says the device is the WebGL2 backend, which a browser without
 WebGPU gets (docs/web.md): rendering only, no compute or storage buffers.
+
+### GpuCounts
+
+```eskiu
+struct GpuCounts {
+    int buffers;
+    uint64 buffer_bytes;
+    int textures;
+    uint64 texture_bytes;
+    int render_pipelines;
+    int compute_pipelines;
+    int bind_groups;
+    int samplers;
+}
+```
+
+The GPU objects made through this package that are still alive, in the whole process
+(every Gpu together): buffers and their bytes, textures and their bytes (every mip level,
+layer and sample), render and compute pipelines, WebGPU bind groups (a GpuBindGroup counts
+once it has been used in a pass, a pipeline's group 0 once drawn with), and samplers.
+gpu_counts() reads them; compare two readings to find what grows (docs/profiling.md). The
+numbers are plain integers, not atomic: read them from the thread that makes and releases
+the objects. A GpuTexture over a texture made outside wgpu (Gpu_texture_from_metal,
+Gpu_texture_from_vulkan) counts too, with the bytes its size and format would take.
+
+### gpu_counts
+
+```eskiu
+GpuCounts gpu_counts()
+```
+
+The live GPU objects made through this package so far (see GpuCounts).
 
 ### GpuBuffer
 
@@ -2960,6 +2993,34 @@ Resources for the bindings of a GpuBindLayout, set on a pass with
 GpuPass_set_group. The WebGPU bind group is made on first use and kept until
 a binding changes, so a group set every frame costs nothing to rebuild.
 
+### GpuTimer
+
+```eskiu
+struct GpuTimer {
+    Gpu gpu;
+    WGPUQuerySet set;
+    GpuBuffer resolve;
+    List<_GpuTimerSlot> slots;
+    uint32 capacity;
+    uint32 used;
+    int slot;
+    double period;
+    int64 frames;
+    double last_ms;
+    int64 last_frame;
+    List<double> pass_ms;
+    int dropped;
+}
+```
+
+The GPU's own time per frame from timestamp queries (Gpu.timestamps), made by Gpu_timer.
+An encoder handed the timer (GpuEncoder_time) has the GPU write its clock at the start
+and the end of each of its render passes; GpuTimer_poll collects the times a few frames
+later without waiting. last_ms is the GPU time of the latest frame collected, from the
+start of its first pass to the end of its last (-1 before the first), last_frame its
+number (frames are counted by timed submissions), pass_ms each of its passes, and
+dropped the frames not timed because every read-back buffer was still on its way.
+
 ### GpuEncoder
 
 ```eskiu
@@ -2967,11 +3028,13 @@ struct GpuEncoder {
     Gpu gpu;
     WGPUCommandEncoder enc;
     List<WGPUBindGroup> groups;
+    *GpuTimer timer;
 }
 ```
 
 A command encoder that passes are opened from (GpuEncoder_pass), sent to
-the GPU in one submission by GpuEncoder_submit.
+the GPU in one submission by GpuEncoder_submit. timer, when set by
+GpuEncoder_time, times its render passes.
 
 ### GpuPassOptions
 
@@ -3174,6 +3237,14 @@ count every WebGPU device supports for the common formats): a color target
 resolved into a single-sample view at the end of a pass
 (GpuPassOptions.resolve), or a depth (and stencil) texture for the same
 pass. It is only drawn into: it cannot be read back or sampled.
+
+### GpuTexture_bytes
+
+```eskiu
+uint64 GpuTexture_bytes(*GpuTexture t)
+```
+
+The bytes a texture takes: every mip level of every layer, times its samples.
 
 ### gpu_srgb_format
 
@@ -3843,6 +3914,46 @@ void GpuSurface_release(*GpuSurface self)
 
 Unconfigures and releases the surface; a second call does nothing. Present or drop the
 current frame first.
+
+### Gpu_timer
+
+```eskiu
+Result<GpuTimer, string> Gpu_timer(*Gpu self, uint32 passes)
+```
+
+A timer for frames of up to passes render passes (2 to 128; 32 when 0), with three
+read-back buffers so that collecting a frame's times never waits for the GPU. Fails
+with "timer: no timestamp queries on this device" when Gpu.timestamps is false (WebGL2,
+a driver without them): report the GPU time as unavailable then, rather than guessing.
+The timer holds a query set and four small buffers (16 bytes a pass each).
+
+### GpuEncoder_time
+
+```eskiu
+bool GpuEncoder_time(*GpuEncoder self, *GpuTimer timer)
+```
+
+Times this encoder's render passes with timer (the passes begun after the call; up to
+the timer's passes, the rest untimed). Returns false, timing nothing, when the three
+earlier frames' times are all still on their way back (GpuTimer.dropped counts them).
+
+### GpuTimer_poll
+
+```eskiu
+bool GpuTimer_poll(*GpuTimer self)
+```
+
+Collects the times of the frames whose read-back has arrived, without waiting; last_ms
+then holds the latest. Returns whether a new frame's time came in. GpuEncoder_time
+calls it.
+
+### GpuTimer_release
+
+```eskiu
+void GpuTimer_release(*GpuTimer self)
+```
+
+Waits for the times still on their way, then releases the query set and the buffers.
 
 
 ## `<gpu/safetensors>`
